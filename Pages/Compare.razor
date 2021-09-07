@@ -1,0 +1,438 @@
+﻿@page "/compare/{text}/"
+@using GitHubBlazor.Data
+@using GitHubBlazor.Extensions
+@using System.Collections.Immutable
+@using System.Text.Json
+@using GitHubBlazor.Api
+@using Blazored.LocalStorage
+@using ChartJs.Blazor.Common
+@using ChartJs.Blazor.Common.Axes
+@using ChartJs.Blazor.Common.Enums
+@using ChartJs.Blazor.Common.Time
+@using ChartJs.Blazor.LineChart
+@using Refit
+
+
+<Layout
+    style="min-height: 100vh" >
+    <Header>
+        <Topbar
+            CompareEnabled="true" />
+    </Header>
+    <Content>
+        <Spin
+            Spinning="@(Loading)" >
+            <div
+                style="
+                    display:flex;
+                    flex-direction: column;
+                    background-color: white;
+                    max-width: 1000px;
+                    margin-top: 16px;
+                    margin-left: auto;
+                    margin-right: auto;
+                " >
+                <PageHeader
+                    Title="Compare portfolios"
+                    OnBack="@(() => navigationManager.NavigateTo("/"))" >
+                </PageHeader>
+                <h3
+                    style="margin: 8px" >
+                    Settings
+                </h3>
+                <Form
+                    Model="@(this)"
+                    OnFinish="ConfigurationChanged"
+                    Style="margin: 8px" >
+                    <FormItem
+                        Label="Start date" >
+                        <DatePicker
+                            @bind-Value="@context.StartDate" >
+                        </DatePicker>
+                    </FormItem>
+                    <FormItem
+                        Label="Investment sum (€)" >
+                        <AntDesign.InputNumber
+                            @bind-Value="@context.InvestmentSum" />
+                    </FormItem>
+                    @* <FormItem *@
+                    @*     Label="Rebalancing" > *@
+                    @*     <Select *@
+                    @*         @bind-Value="@context.RebalancingStrategy" *@
+                    @*         Style="width: 200px" *@
+                    @*         TItemValue="RebalancingInterval" *@
+                    @*         TItem="string" > *@
+                    @*         <SelectOptions> *@
+                    @*             <SelectOption *@
+                    @*                 Value="@RebalancingInterval.Never" *@
+                    @*                 Label="Never" *@
+                    @*                 TItemValue="RebalancingInterval" *@
+                    @*                 TItem="string" /> *@
+                    @*             <SelectOption *@
+                    @*                 Value="@RebalancingInterval.Yearly" *@
+                    @*                 Label="Yearly" *@
+                    @*                 TItemValue="RebalancingInterval" *@
+                    @*                 TItem="string" /> *@
+                    @*             <SelectOption *@
+                    @*                 Value="@RebalancingInterval.Quarterly" *@
+                    @*                 Label="Quarterly" *@
+                    @*                 TItemValue="RebalancingInterval" *@
+                    @*                 TItem="string" /> *@
+                    @*             <SelectOption *@
+                    @*                 Value="@RebalancingInterval.Monthly" *@
+                    @*                 Label="Monthly" *@
+                    @*                 TItemValue="RebalancingInterval" *@
+                    @*                 TItem="string" /> *@
+                    @*         </SelectOptions> *@
+                    @*     </Select> *@
+                    @* </FormItem> *@
+                    <FormItem >
+                        <Button
+                            Type="@ButtonType.Primary"
+                            HtmlType="submit" >
+                            Submit
+                        </Button>
+                    </FormItem>
+                </Form>
+                @foreach (var portfolio in Portfolios)
+                {
+                    <div
+                        style="
+                            margin: 8px;
+                        " >
+                        <h4>@portfolio.Name</h4>
+                        <div
+                            style="
+                                display: grid;
+                                grid-template-columns: max-content max-content max-content auto;
+                                grid-column-gap: 16px;
+                            " >
+                            @foreach (var asset in portfolio.Assets)
+                            {
+                                <div>
+                                    @((asset.Amount / portfolio.AmountSum()).ToString("P2"))
+                                </div>
+                                <div>
+                                    @asset.Symbol
+                                </div>
+                                <div>
+                                    <a
+                                        target="_blank"
+                                        href="@("https://www.justetf.com/en/find-etf.html?query=" + asset.Symbol.Split('.')[0])" >
+                                        justETF
+                                    </a>
+                                </div>
+                                <div>
+                                    @asset.Name
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+                <h3
+                    style="margin: 8px" >
+                    Chart
+                </h3>
+                <div
+                    style="margin: 8px" >
+                    <Chart
+                        Config="ChartConfig" >
+                    </Chart>
+                </div>
+            </div>
+        </Spin>
+    </Content>
+</Layout>
+
+@inject NavigationManager navigationManager
+@inject HttpClient httpClient
+@inject IAlphaVantage alphaVantage
+@inject ILocalStorageService localStorage
+@inject Database database
+@inject NotificationService notificationService
+
+@code
+{
+    [Parameter]
+    public string Text { get; set; } = null!;
+
+    private DateTime StartDate { get; set; } = DateTime.Today;
+
+    private int InvestmentSum { get; set; } = 1000;
+    // private RebalancingInterval RebalancingStrategy { get; set; } = RebalancingInterval.Never;
+
+    private bool Loading { get; set; } = true;
+    private Portfolio[] Portfolios { get; set; } = { };
+
+    private ImmutableArray<(Portfolio portfolio, ImmutableArray<(DateOnly date, ImmutableArray<(Asset asset, decimal value)> values)> data)> Data { get; set; } =
+        ImmutableArray<(Portfolio portfolio, ImmutableArray<(DateOnly date, ImmutableArray<(Asset asset, decimal value)> values)> data)>.Empty;
+
+    private ImmutableArray<(Portfolio portfolio, ImmutableArray<(DateOnly date, decimal)>)> CalculatedData { get; set; } =
+        ImmutableArray<(Portfolio portfolio, ImmutableArray<(DateOnly date, decimal)>)>.Empty;
+
+    private LineConfig ChartConfig { get; } = new()
+    {
+        Options = new LineOptions
+        {
+            Responsive = true,
+            Title = new OptionsTitle
+            {
+                Display = false,
+            },
+            Tooltips = new Tooltips
+            {
+                Mode = InteractionMode.Nearest,
+                Intersect = false,
+                CornerRadius = 0,
+            },
+            Hover = new Hover
+            {
+                Mode = InteractionMode.Nearest,
+                Intersect = false,
+            },
+            Scales = new Scales
+            {
+                XAxes = new List<CartesianAxis>
+                {
+                    new TimeAxis
+                    {
+                        Time = new TimeOptions
+                        {
+                            Unit = TimeMeasurement.Day,
+                        },
+                    },
+                },
+                YAxes = new List<CartesianAxis>
+                {
+                    new LinearCartesianAxis(),
+                },
+            },
+        },
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        try
+        {
+            var unescaped = Uri.UnescapeDataString(Text);
+            Portfolios = JsonSerializer.Deserialize<Portfolio[]>(unescaped) ?? throw new NullReferenceException();
+
+            var values = await Task.WhenAll(Portfolios
+                .SelectMany(p => p.Assets.Select(a => a.Symbol))
+                .Select(async x =>
+                    (x, await alphaVantage.TimeSeriesDailyAdjusted(x, await localStorage.GetApiKey()))
+                )
+                );
+            var dict = values.ToImmutableDictionary(x => x.x, x => x.Item2);
+
+            IEnumerable<(DateOnly date, ImmutableArray<(Asset asset, decimal value)>)> IteratePortfolio(
+                Portfolio portfolio
+                )
+            {
+                var enumerators = portfolio.Assets
+                    .Select(a => dict[a.Symbol].AsEnumerable().GetEnumerator())
+                    .ToImmutableArray();
+
+                var currentDate = DateOnly.MinValue;
+                var currentValues = ImmutableArray.CreateBuilder<(Asset asset, decimal value)>();
+                var currentAsset = 0;
+
+                while (true)
+                {
+                    var enumerator = enumerators[currentAsset];
+                    do
+                    {
+                        if (!enumerator.MoveNext()) yield break; // One asset is finish, now more be be done here
+                    } while (enumerator.Current.date < currentDate);
+
+                    if (enumerator.Current.date > currentDate)
+                    {
+                        currentDate = enumerator.Current.date;
+                        currentValues.Clear();
+                    }
+                    currentValues.Add((portfolio.Assets[currentAsset], enumerator.Current.Item2));
+                    if (currentValues.Count == enumerators.Length)
+                    {
+                        yield return (currentDate, currentValues.ToImmutable());
+                        currentValues.Clear();
+                    }
+                    currentAsset = (currentAsset + 1) % portfolio.Assets.Count;
+                }
+            }
+
+    // IEnumerable<(DateOnly date, ImmutableArray<(Portfolio portfolio, ImmutableArray<(Asset asset, decimal value)>)>)> IterateMain()
+    // {
+    //     var enumerators = Portfolios
+    //         .Select(IteratePortfolio)
+    //         .ToImmutableArray();
+    //     
+    //     var currentDate = DateOnly.MinValue;
+    //     var currentValues = ImmutableArray.CreateBuilder<(Portfolio portfolio, ImmutableArray<(Asset asset, decimal value)>)>();
+    //     var currentPortfolio = 0;
+    //     
+    //     while (true)
+    //     {
+    //         var enumerator = enumerators[currentPortfolio];
+    //         do
+    //         {
+    //             if (!enumerator.MoveNext()) yield break; // One asset is finish, now more be be done here
+    //         } while (enumerator.Current.date < currentDate);
+    //         
+    //         if (enumerator.Current.date > currentDate)
+    //         {
+    //             currentDate = enumerator.Current.date;
+    //             currentValues.Clear();
+    //         }
+    //         currentValues.Add((Portfolios[currentPortfolio], enumerator.Current.Item2));
+    //         if (currentValues.Count == enumerators.Length)
+    //         {
+    //             yield return (currentDate, currentValues.ToImmutable());
+    //             currentValues.Clear();
+    //         }
+    //         currentPortfolio = (currentPortfolio + 1) % Portfolios.Length;
+    //     }
+    // }
+
+            Data = Portfolios
+                .Select(x => (x, IteratePortfolio(x).ToImmutableArray()))
+                .ToImmutableArray();
+            StartDate = FindFirstCommonDate().ToDateTime(TimeOnly.MinValue);
+
+            ConfigurationChanged();
+
+            Loading = false;
+        }
+        catch (Exception exception)
+        {
+            await notificationService.Error(new NotificationConfig
+            {
+                Message = exception switch {
+                    ApiException apiException => apiException.InnerException switch {
+                        AlphaVantageLimitException => "API rate limit exceeded. Please try again in one minute.",
+                        AlphaVantageApiKeyException => "Invalid API key. Please make sure that you have correctly set the API key.",
+                        Exception e => $"Unexpected error: {e.Message}",
+                        null => $"Unexpected error: {apiException.Message}",
+                        },
+                    _ => $"Unexpected error: {exception.Message}",
+                    },
+            });
+        }
+    }
+
+    // enum RebalancingInterval
+    // {
+    //     Never,
+    //     Yearly,
+    //     Quarterly,
+    //     Monthly,
+    // }
+
+    private DateOnly FindFirstCommonDate(DateOnly? startDate = null)
+    {
+        var iterators = Data
+            .Select(x => x.data.AsEnumerable().GetEnumerator())
+            .ToImmutableArray();
+        var date = startDate ?? DateOnly.MinValue;
+        var index = 0;
+        var count = 0;
+        while (true)
+        {
+            if (count == iterators.Length) break;
+
+            var iterator = iterators[index];
+
+            if (!iterator.MoveNext())
+            {
+                throw new Exception("Could not find start date");
+            }
+
+            if (iterator.Current.date == date)
+            {
+                count++;
+                index = (index + 1) % iterators.Length;
+            }
+            else if (iterator.Current.date > date)
+            {
+                date = iterator.Current.date;
+                count = 1;
+                index = (index + 1) % iterators.Length;
+            }
+        }
+        return date;
+    }
+
+    private void ConfigurationChanged()
+    {
+        Console.WriteLine("Config changed");
+
+        var startDate = FindFirstCommonDate(DateOnly.FromDateTime(StartDate));
+        StartDate = startDate.ToDateTime(TimeOnly.MinValue);
+
+        var initialShares = Data
+            .ToImmutableDictionary(
+                p => p.portfolio,
+                p => p.data
+                    .First(x => x.date == startDate)
+                    .values
+                    .ToImmutableDictionary(
+                        x => x.asset,
+                        a => InvestmentSum * a.asset.Amount / p.portfolio.AmountSum() / a.value
+                    )
+            );
+
+        CalculatedData = Data.Select(d => (
+            d.portfolio, 
+                d.data
+                    .SkipWhile(x => x.date < startDate)
+                    .Select(p => (
+                        p.date, 
+                            Math.Round(p.values.Sum(v => initialShares[d.portfolio][v.asset] * v.value), 2)
+                        ))
+                    .ToImmutableArray()
+            ))
+            .ToImmutableArray();
+
+        ChartConfig.Data.Datasets.Clear();
+        foreach (var (portfolio, values) in CalculatedData)
+        {
+            var str = portfolio.Name;
+            int hue;
+            unchecked
+            {
+                var hash1 = (5381 << 16) + 5381;
+                var hash2 = hash1;
+
+                for (int i = 0; i < str.Length; i += 2)
+                {
+                    hash1 = ((hash1 << 5) + hash1) ^ str[i];
+                    if (i == str.Length - 1)
+                        break;
+                    hash2 = ((hash2 << 5) + hash2) ^ str[i + 1];
+                }
+
+                hue = (hash1 + hash2 * 1566083941) % 360;
+            }
+
+            var color = $"hsl({hue}, 90%, 70%)";
+            var data = new LineDataset<TimePoint>
+            {
+                Label = portfolio.Name,
+                BorderColor = color,
+                BackgroundColor = color,
+                Fill = false,
+                LineTension = 0,
+                PointRadius = 0,
+            };
+            data.AddRange(values.Select(v =>
+                new TimePoint(v.date.ToDateTime(TimeOnly.MinValue), (double)v.Item2)
+                ));
+            ChartConfig.Data.Datasets.Add(data);
+        }
+    }
+
+}

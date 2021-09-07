@@ -1,0 +1,148 @@
+﻿@page "/"
+
+@using GitHubBlazor.Data
+@using System.Web
+@using System.Collections.Immutable
+@using System.ComponentModel.DataAnnotations
+@using System.Net
+@using System.Text.Json
+@using Newtonsoft.Json
+@using JsonSerializer = System.Text.Json.JsonSerializer
+
+@inject NavigationManager navigationManager
+
+<Layout
+    style="min-height: 100vh" >
+    <Header>
+        <Topbar
+            CompareEnabled="false" />
+    </Header>
+    <Content>
+        <div
+            style="display: flex; justify-content: space-between" >
+            <Button
+                style="margin: 8px"
+                OnClick="@(() => navigationManager.NavigateTo("newportfolio/"))" >
+                Add Portfolio
+            </Button>
+            <Button
+                style="margin: 8px"
+                Disabled="@(portfolios.Count(x => x.Selected) < 2)"
+                OnClick="Compare" >
+                Compare now
+            </Button>
+        </div>
+
+        <div
+            style="
+                display: grid; 
+                grid-auto-flow: row; 
+                grid-template-columns: repeat(auto-fill, minmax(min(480px, 100%), 1fr));
+                padding: 8px;
+                grid-gap: 8px;
+        " >
+            @foreach (var holder in portfolios)
+            {
+                <div
+                    @onclick="@(() => holder.Selected = !holder.Selected)" >
+                    <Card
+                        style="@(holder.Selected ? "cursor: pointer; border-color: #40a9ff;" : "cursor: pointer")"
+                        Title="@holder.Portfolio.Name" >
+                        <Body>
+                        <div
+                            style="
+                                display: grid;
+                                grid-template-columns: max-content max-content auto;
+                                grid-column-gap: 16px;
+                            " >
+                            @foreach (var asset in holder.Portfolio.Assets)
+                            {
+                                <div>
+                                    @((asset.Amount / holder.Portfolio.AmountSum()).ToString("P2"))
+                                </div>
+                                <div>
+                                    @asset.Symbol
+                                </div>
+                                <div>
+                                    @asset.Name
+                                </div>
+                            }
+                        </div>
+                        </Body>
+                        <Extra>
+                            <Button
+                                OnClick="@(() => EditPortfolio(holder.Portfolio))" >
+                                Edit
+                            </Button>
+                            <Popconfirm
+                                Title="Are you sure to delete this portfolio?"
+                                OnConfirm="@(async () => await DeletePortfolio(holder))" >
+                                <Button>
+                                    Delete
+                                </Button>
+                            </Popconfirm>
+                        </Extra>
+                    </Card>
+                </div>
+            }
+        </div>
+    </Content>
+</Layout>
+
+@inject Database database
+@inject MessageService messageService
+
+@code {
+
+    public class PortfolioHolder
+    {
+        public PortfolioHolder(PortfolioWithId portfolio, bool selected)
+        {
+            Portfolio = portfolio;
+            Selected = selected;
+        }
+
+        public PortfolioWithId Portfolio { get; }
+        public bool Selected { get; set; }
+    }
+
+    private readonly List<PortfolioHolder> portfolios = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPortfolios();
+    }
+
+    private async Task LoadPortfolios()
+    {
+        portfolios.Clear();
+        foreach (var portfolio in await database.Portfolios.GetAll())
+        {
+            portfolios.Add(new PortfolioHolder(portfolio, false));
+        }
+    }
+
+    private async Task DeletePortfolio(PortfolioHolder portfolio)
+    {
+        await database.Portfolios.Delete(portfolio.Portfolio.Id!.Value);
+        portfolios.Remove(portfolio);
+    }
+
+    private void EditPortfolio(PortfolioWithId portfolio)
+    {
+        navigationManager.NavigateTo("/editportfolio/" + portfolio.Id!.Value + "/");
+    }
+
+    private void Compare()
+    {
+        var arguments = portfolios
+            .Where(x => x.Selected)
+            .Select(x => x.Portfolio)
+            .ToArray();
+        var serialized = JsonSerializer.Serialize(arguments, typeof(Portfolio[]));
+        var escaped = Uri.EscapeDataString(serialized);
+        
+        navigationManager.NavigateTo($"/compare/{escaped}/");
+    }
+
+}

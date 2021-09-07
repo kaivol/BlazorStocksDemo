@@ -1,0 +1,334 @@
+﻿@page "/editportfolio/{id:long?}/"
+@page "/newportfolio/"
+@using Blazored.LocalStorage
+@using AntDesign.TableModels
+@using GitHubBlazor.Api
+@using GitHubBlazor.Data
+@using Refit
+
+@inject NavigationManager navigationManager
+
+<Layout
+    style="min-height: 100vh" >
+    <Header>
+        <Topbar
+            CompareEnabled="false" />
+    </Header>
+    <Content>
+        <div
+            style="
+                display:flex;
+                flex-direction: column;
+                background-color: white;
+                max-width: 1000px;
+                margin-top: 16px;
+                margin-left: auto;
+                margin-right: auto;
+            " >
+            <PageHeader 
+                Title="Edit portfolio"
+                OnBack="@(() => navigationManager.NavigateTo("/"))"></PageHeader>
+            <div
+                style="
+                    margin: 8px;
+                    display: flex; 
+                    align-items: center;
+                " >
+                Name:
+                <Input
+                    style="margin-left: 8px"
+                    placeholder="Portfolio name"
+                    @bind-Value="@portfolio.Name" >
+            </div>
+            <div
+                style="
+                    margin: 8px;
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: space-between;
+                " >
+                Assets:
+                <Button
+                    OnClick="AddAsset" >
+                    Add asset
+                </Button>
+            </div>
+            <Table
+                DataSource="@portfolio.Assets"
+                Size="TableSize.Small"
+                HidePagination="true" >
+                <ChildContent
+                    Context="data" >
+                    <Column
+                        Title="Symbol"
+                        TData="string"
+                        Width="120"
+                        DataIndex="@nameof(data.Symbol)" >
+                        <div
+                            Class="editable-cell-value-wrap"
+                            @onclick="() => ChangeSymbol(data)" >
+                            @data.Symbol
+                        </div>
+                    </Column>
+                    <Column
+                        TData="string"
+                        Title="Name"
+                        DataIndex="@nameof(data.Name)" >
+                        <div
+                            Class="editable-cell-value-wrap"
+                            @onclick="() => ChangeSymbol(data)" >
+                            @data.Name
+                        </div>
+                    </Column>
+                    <Column
+                        TData="double"
+                        Title="Amount"
+                        Width="60" >
+                        <AntDesign.InputNumber
+                            @bind-Value="data.Amount" />
+                    </Column>
+                    <Column
+                        TData="double"
+                        Title="%"
+                        Width="80" >
+                        @((data.Amount / portfolio.AmountSum()).ToString("P2"))
+                    </Column>
+                    <ActionColumn>
+                        <Space>
+                            <SpaceItem>
+                                <Button
+                                    Danger
+                                    OnClick="() => Delete(data)" >
+                                    Delete
+                                </Button>
+                            </SpaceItem>
+                        </Space>
+                    </ActionColumn>
+                </ChildContent>
+            </Table>
+            <Button
+                style="
+                    margin: 8px;
+                    align-self: start;
+                "
+                Disabled="@(!IsValid)"
+                Type="@ButtonType.Primary"
+                Icon="save"
+                Loading="@savingPortfolio"
+                OnClick="SavePortfolio" >
+                Save
+            </Button>
+        </div>
+    </Content>
+</Layout>
+
+<Modal
+    Title="Choose Stock"
+    Visible="@(editedAsset != null)"
+    Footer="null"
+    OnCancel="OnCancelDialog" >
+    <div
+        Style="margin-bottom: 8px" >
+        <Search
+            Placeholder="Search stock"
+            EnterButton="true"
+            OnSearch="OnSearch"
+            @bind-Loading="@loading"
+            @bind-Value="@query" />
+    </div>
+    <Table
+        Size="TableSize.Small"
+        DataSource="@items"
+        HidePagination="true"
+        OnRow="OnRow" >
+        <Column
+            Title="Symbol"
+            TData="string"
+            Field="@context.Symbol" >
+        </Column>
+        <Column
+            Title="Name"
+            TData="string"
+            Field="@context.Name" >
+        </Column>
+        <Column
+            Title="Region"
+            TData="string"
+            Field="@context.Region" >
+        </Column>
+        <Column
+            Title="Currency"
+            TData="string"
+            Field="@context.Currency" >
+        </Column>
+    </Table>
+</Modal>
+
+<!--suppress CssUnusedSymbol -->
+<style>
+    .stock-row {
+        cursor: pointer;
+    }
+    .stock-row-disabled {
+        opacity: 0.5;
+    }
+    .editable-cell-value-wrap {
+        padding: 5px 12px;
+        cursor: pointer;
+    }
+    td:hover .editable-cell-value-wrap {
+        padding: 4px 11px;
+        border: 1px solid #d9d9d9;
+        border-radius: 4px;
+    }
+</style>
+
+@inject Database database
+@inject ILocalStorageService localStorage
+@inject MessageService messageService
+@inject IAlphaVantage alphaVantage
+@inject NotificationService notificationService
+
+@code {
+
+    [Parameter]
+    public long? Id { get; set; }
+
+    PortfolioWithId portfolio = new();
+    bool savingPortfolio = false;
+
+    record EditedAsset(Asset? Asset)
+    {
+        public static readonly EditedAsset NewAsset = new(Asset: null);
+    }
+
+    EditedAsset? editedAsset = null;
+
+    string query = "";
+    bool loading = false;
+    IEnumerable<SymbolSearchMatch> items = new List<SymbolSearchMatch>();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        Console.WriteLine("OnParametersSetAsync: Id=" + Id);
+        if (Id is {} id)
+        {
+            if (await database.Portfolios.Get(id) is {} retrievedPortfolio)
+            {
+                portfolio = retrievedPortfolio;
+            }
+            else
+            {
+                var _ = messageService.Warning($"Portfolio with Id={Id} could not be found");
+                navigationManager.NavigateTo("/");
+            }
+        }
+        else
+        {
+            portfolio = new PortfolioWithId();
+        }
+    }
+
+    bool IsValid => portfolio.Name != "" && portfolio.Assets.Any(a => a.Amount > 0);
+
+    private void SavePortfolio() => Task.Run(async () =>
+    {
+        if (savingPortfolio) return;
+        savingPortfolio = true;
+        StateHasChanged();
+        if (portfolio.Id is {})
+        {
+            await database.Portfolios.Put(portfolio);
+    // savingPortfolio = false;
+    // StateHasChanged();
+        }
+        else
+        {
+            var _ = await database.Portfolios.Add(portfolio);
+    // navigationManager.NavigateTo("editportfolio/" + newId);
+    // savingPortfolio = false;
+    // StateHasChanged();
+        }
+        navigationManager.NavigateTo("/");
+    });
+
+    private async Task OnSearch(string queryString)
+    {
+        loading = true;
+        try
+        {
+            items = await alphaVantage.SymbolSearch(queryString, await localStorage.GetApiKey());
+        }
+        catch (ApiException apiException)
+        {
+            Console.WriteLine(apiException);
+            await notificationService.Error(new NotificationConfig
+            {
+                Message = apiException.InnerException switch {
+                    AlphaVantageLimitException => "API rate limit exceeded. Please try again in one minute.",
+                    AlphaVantageApiKeyException => "Invalid API key. Please make sure that you have correctly set the API key.",
+                    Exception e => $"Unexpected error: {e.Message}",
+                    null => $"Unexpected error: {apiException.Message}",
+                },
+            });
+        }
+        loading = false;
+    }
+
+    private void ChangeSymbol(Asset data)
+    {
+        editedAsset = new EditedAsset(data);
+    }
+
+    private void Delete(Asset data)
+    {
+        portfolio.Assets.Remove(data);
+    }
+
+    private Dictionary<string, object> OnRow(RowData<SymbolSearchMatch> data)
+    {
+        if (data.Data.Currency is "EUR" && portfolio.Assets.All(a => a.Symbol != data.Data.Symbol))
+        {
+            return new Dictionary<string, object>
+            {
+                ["onclick"] = (Action)(() =>
+                {
+                    if (editedAsset is not null)
+                    {
+                        if (editedAsset.Asset is Asset asset)
+                        {
+                            asset.Symbol = data.Data.Symbol;
+                            asset.Name = data.Data.Name;
+                        }
+                        else
+                        {
+                            portfolio.Assets.Add(new Asset(
+                                data.Data.Symbol,
+                                data.Data.Name,
+                                new decimal(0)
+                            ));
+                        }
+                        editedAsset = null;
+                        StateHasChanged();
+                    }
+                }),
+                ["class"] = "stock-row",
+            };
+        }
+        return new Dictionary<string, object>
+        {
+            ["class"] = "stock-row-disabled",
+        };
+    }
+
+    private void AddAsset()
+    {
+        editedAsset = EditedAsset.NewAsset;
+    }
+
+    private void OnCancelDialog()
+    {
+        editedAsset = null;
+    }
+
+}

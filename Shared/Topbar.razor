@@ -1,0 +1,65 @@
+﻿<Menu
+    Theme="MenuTheme.Dark"
+    Mode="MenuMode.Horizontal"
+    Selectable="false" 
+    Style="
+        display: grid; 
+        grid-template-columns: 0px auto auto 1fr auto"
+    DefaultSelectedKeys="@(CompareEnabled ? new[]{"compare"} : new string[]{})">
+    <MenuItem
+        Key="portfolios"
+        RouterLink="/"
+        RouterMatch="NavLinkMatch.All" 
+        Title="Portfolios"></MenuItem>
+    
+    <MenuItem
+        Key="compare"
+        Disabled="@(!CompareEnabled)"
+        Title="Compare">
+    </MenuItem>
+    
+    <div></div>
+    
+    <MenuItem
+        Key="settings"
+        Title="Settings"
+        Icon="setting"
+        OnClick="() => SettingsOpen = true"></MenuItem>
+</Menu>
+
+<Modal
+    Title="Settings"
+    Visible="SettingsOpen"
+    OnCancel="() => SettingsOpen = false"
+    OnOk="SaveSettings">
+    <Form
+        Model="this">
+        <FormItem
+            Label="AlphaVantage API key">
+            <Input @bind-Value="ApiKey">
+        </FormItem>
+    </Form>
+</Modal>
+
+@inject Blazored.LocalStorage.ILocalStorageService localStorage
+
+@code
+{
+    [Parameter]
+    public bool CompareEnabled { get; set; } = false;
+
+    private bool SettingsOpen { get; set; } = false;
+
+    private string ApiKey { get; set; } = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        ApiKey = await localStorage.GetApiKey();
+    }
+
+    private async Task SaveSettings(MouseEventArgs obj)
+    {
+        await localStorage.SetApiKey(ApiKey);
+        SettingsOpen = false;
+    }
+}
