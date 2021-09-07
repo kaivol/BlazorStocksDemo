@@ -124,7 +124,7 @@
 
     private void EditPortfolio(PortfolioWithId portfolio)
     {
-        navigationManager.NavigateTo("/editportfolio/" + portfolio.Id!.Value + "/");
+        navigationManager.NavigateTo("editportfolio/" + portfolio.Id!.Value + "/");
     }
 
     private void Compare()
@@ -136,7 +136,7 @@
         var serialized = JsonSerializer.Serialize(arguments, typeof(Portfolio[]));
         var escaped = Uri.EscapeDataString(serialized);
         
-        navigationManager.NavigateTo($"/compare/{escaped}/");
+        navigationManager.NavigateTo($"compare/{escaped}/");
     }
 
 }

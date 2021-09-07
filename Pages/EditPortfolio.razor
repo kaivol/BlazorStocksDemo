@@ -220,7 +220,7 @@
             else
             {
                 var _ = messageService.Warning($"Portfolio with Id={Id} could not be found");
-                navigationManager.NavigateTo("/");
+                navigationManager.NavigateTo("");
             }
         }
         else
@@ -249,7 +249,7 @@
     // savingPortfolio = false;
     // StateHasChanged();
         }
-        navigationManager.NavigateTo("/");
+        navigationManager.NavigateTo("");
     });
 
     private async Task OnSearch(string queryString)
