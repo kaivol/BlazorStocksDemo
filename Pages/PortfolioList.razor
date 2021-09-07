@@ -3,13 +3,11 @@
 @using GitHubBlazor.Data
 @using System.Text.Json
 
-@inject NavigationManager navigationManager
-
 <Layout
     style="min-height: 100vh" >
     <Header>
         <Topbar
-            CompareEnabled="false" />
+            Status="Topbar.TopbarStatus.List" />
     </Header>
     <Content>
         <div
@@ -85,6 +83,7 @@
 
 @inject Database database
 @inject MessageService messageService
+@inject NavigationManager navigationManager
 
 @code {
 

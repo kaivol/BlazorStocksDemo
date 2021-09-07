@@ -5,16 +5,20 @@
     Style="
         display: grid; 
         grid-template-columns: 0px auto auto 1fr auto"
-    DefaultSelectedKeys="@(CompareEnabled ? new[]{"compare"} : new string[]{})">
+    DefaultSelectedKeys="@(new []{Status switch {
+                             TopbarStatus.List => "portfolios",
+                             TopbarStatus.Detail => "",
+                             TopbarStatus.Compare => "compare",
+                             }})">
     <MenuItem
         Key="portfolios"
-        RouterLink="/"
-        RouterMatch="NavLinkMatch.All" 
-        Title="Portfolios"></MenuItem>
+        OnClick="@(() => navigationManager.NavigateTo(""))" 
+        Title="Portfolios" >
+    </MenuItem>
     
     <MenuItem
         Key="compare"
-        Disabled="@(!CompareEnabled)"
+        Disabled="@(Status != TopbarStatus.Compare)"
         Title="Compare">
     </MenuItem>
     
@@ -42,11 +46,12 @@
 </Modal>
 
 @inject Blazored.LocalStorage.ILocalStorageService localStorage
+@inject NavigationManager navigationManager
 
 @code
 {
     [Parameter]
-    public bool CompareEnabled { get; set; } = false;
+    public TopbarStatus Status { get; set; } = default;
 
     private bool SettingsOpen { get; set; } = false;
 
@@ -61,5 +66,10 @@
     {
         await localStorage.SetApiKey(ApiKey);
         SettingsOpen = false;
+    }
+
+    public enum TopbarStatus
+    {
+        List, Detail, Compare
     }
 }
